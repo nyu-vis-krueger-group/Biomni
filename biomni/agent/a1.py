@@ -1732,10 +1732,12 @@ Each library is listed with its description to help you understand its functiona
 
         # Use prompt-based retrieval with the agent's LLM
         selected_resources = self.retriever.prompt_based_retrieval(prompt, resources, llm=self.llm)
-        print("\n" + "=" * 60)
-        print("🔍 RESOURCE RETRIEVAL")
-        print("=" * 60)
-        print("Using prompt-based retrieval with the agent's LLM")
+
+        if not self.minimal_mode:
+            print("\n" + "=" * 60)
+            print("🔍 RESOURCE RETRIEVAL")
+            print("=" * 60)
+            print("Using prompt-based retrieval with the agent's LLM")
 
         # Extract the names from the selected resources for the system prompt
         selected_resources_names = {
@@ -1758,13 +1760,15 @@ Each library is listed with its description to help you understand its functiona
 
         # Process know-how documents - get the full content for selected documents
         if "know_how" in selected_resources and selected_resources["know_how"]:
-            print("\n📚 Know-How Documents Retrieved:")
+            if not self.minimal_mode:
+                print("\n📚 Know-How Documents Retrieved:")
             for item in selected_resources["know_how"]:
                 if isinstance(item, dict):
                     doc_id = item["id"]
                     doc = self.know_how_loader.get_document_by_id(doc_id)
                     if doc:
-                        print(f"  ✓ {doc['name']}")
+                        if not self.minimal_mode:
+                            print(f"  ✓ {doc['name']}")
                         # Create a copy with content_without_metadata for agent context
                         doc_for_agent = {
                             "id": doc["id"],
@@ -1775,16 +1779,18 @@ Each library is listed with its description to help you understand its functiona
                         }
                         selected_resources_names["know_how"].append(doc_for_agent)
         else:
-            print("\n📚 Know-How: None retrieved for this query")
+            if not self.minimal_mode:
+                print("\n📚 Know-How: None retrieved for this query")
 
         # Print summary of what was retrieved
-        print("\n" + "-" * 60)
-        print("📊 RETRIEVAL SUMMARY:")
-        print(f"  🔧 Tools: {len(selected_resources_names['tools'])} selected")
-        print(f"  📊 Data Lake: {len(selected_resources_names['data_lake'])} selected")
-        print(f"  ⚙️  Libraries: {len(selected_resources_names['libraries'])} selected")
-        print(f"  📚 Know-How: {len(selected_resources_names['know_how'])} selected")
-        print("=" * 60 + "\n")
+        if not self.minimal_mode:
+            print("\n" + "-" * 60)
+            print("📊 RETRIEVAL SUMMARY:")
+            print(f"  🔧 Tools: {len(selected_resources_names['tools'])} selected")
+            print(f"  📊 Data Lake: {len(selected_resources_names['data_lake'])} selected")
+            print(f"  ⚙️  Libraries: {len(selected_resources_names['libraries'])} selected")
+            print(f"  📚 Know-How: {len(selected_resources_names['know_how'])} selected")
+            print("=" * 60 + "\n")
 
         return selected_resources_names
 
