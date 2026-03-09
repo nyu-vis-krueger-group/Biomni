@@ -1,6 +1,8 @@
 import json
+import os
 import re
 import threading
+from pathlib import Path
 
 from flask import Flask, jsonify, request
 
@@ -18,6 +20,34 @@ _MODE_MAX_STEPS = {
     "db": 15,
     "full": 30,
 }
+
+# HGNC dataset config
+_HGNC_GDRIVE_ID = "1znogniT4GLa_HieLXoE8mO42TA6-UAd_"
+_HGNC_FILENAME = "hgnc_complete_set.tsv"
+_HGNC_DESCRIPTION = (
+    "HUGO Gene Nomenclature Committee (HGNC) complete gene set. "
+    "Contains unique symbols and names for human loci, including protein coding genes, "
+    "ncRNA genes and pseudogenes. Can give canonical names for biomarker names in CyCIF. "
+    "You can use it if you encounter a gene you do not know about, to get its aliases and official names."
+)
+_DATA_DIR = Path(__file__).parent / "data"
+
+
+def _ensure_hgnc(agent: A1) -> None:
+    """Download the HGNC dataset if absent and register it with the agent."""
+    _DATA_DIR.mkdir(parents=True, exist_ok=True)
+    dest = _DATA_DIR / _HGNC_FILENAME
+
+    if not dest.exists():
+        print(f"[HGNC] Downloading to {dest} ...")
+        try:
+            import gdown
+            gdown.download(id=_HGNC_GDRIVE_ID, output=str(dest), quiet=False)
+        except Exception as e:
+            print(f"[HGNC] Download failed: {e}")
+            return
+
+    agent.add_data({str(dest): _HGNC_DESCRIPTION})
 
 
 def _parse_solution(text: str) -> dict:
@@ -62,6 +92,7 @@ def init():
             if api_key:
                 kwargs["api_key"] = api_key
             _agent = A1(**kwargs)
+            _ensure_hgnc(_agent)
             return jsonify({"status": "ok"})
         except Exception as e:
             return jsonify({"status": "error", "message": str(e)}), 500
