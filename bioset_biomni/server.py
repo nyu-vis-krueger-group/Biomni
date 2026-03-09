@@ -98,49 +98,84 @@ def init():
             return jsonify({"status": "error", "message": str(e)}), 500
 
 
-@app.post("/label")
-def label():
-    """Run the agent on a labelling task.
-
-    Body (JSON):
-        labelling : dict   – the labelling specification (required)
-        mode      : str    – "full" | "db" | "minimal"; controls max_steps
-        image     : str    – base64-encoded image (optional)
-
-    Returns the parsed JSON object from the agent's <solution> block.
-    """
-    global _agent
-
+def _check_init():
+    """Return an error response if the agent is not initialised, else None."""
     with _agent_lock:
         if _agent is None:
             return jsonify({"error": "Agent not initialised. Call POST /init first."}), 400
+    return None
 
-    data = request.get_json(force=True, silent=True) or {}
 
-    labelling = data.get("labelling")
-    if labelling is None:
-        return jsonify({"error": "Missing required field: 'labelling'"}), 400
-
-    mode = data.get("mode", "full")
-    image_b64 = data.get("image") or None
+def _run(task_json: dict, image_b64: str | None, mode: str) -> tuple:
+    """Build the prompt, run the agent, and return a (result_dict, None) or (None, error_response)."""
     max_steps = _MODE_MAX_STEPS.get(mode, _MODE_MAX_STEPS["full"])
-
     prompt = (
-        "You are given the following labelling task. "
-        "Analyse the provided data and return your answer ONLY as a JSON object "
-        "inside a <solution> tag — no other text outside the tag.\n\n"
-        f"Labelling specification:\n{json.dumps(labelling, indent=2)}"
+        "Return your answer ONLY as a JSON object inside a <solution> tag — "
+        "no other text outside the tag.\n\n"
+        f"{json.dumps(task_json, indent=2)}"
     )
-
     try:
         with _agent_lock:
             _, response = _agent.go(prompt, image=image_b64, max_steps=max_steps)
-        result = _parse_solution(response)
-        return jsonify(result)
+        return _parse_solution(response), None
     except ValueError as e:
-        return jsonify({"error": str(e)}), 422
+        return None, (jsonify({"error": str(e)}), 422)
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return None, (jsonify({"error": str(e)}), 500)
+
+
+@app.post("/label")
+def label():
+    """Generate biological labels for a set of markers.
+
+    Body (JSON):
+        markers : list[str]  – e.g. ["SOX10:#FFFF00", "PRAME:#FF0000"]  (required)
+        mode    : str        – "full" | "db" | "minimal"; controls max_steps
+        image   : str        – base64-encoded image (optional)
+
+    Returns: {"labels": {...}, "overall": [...]}
+    """
+    err = _check_init()
+    if err:
+        return err
+
+    data = request.get_json(force=True, silent=True) or {}
+    markers = data.get("markers")
+    if not markers:
+        return jsonify({"error": "Missing required field: 'markers'"}), 400
+
+    task_json = {"task": "label", "markers": markers}
+    result, err = _run(task_json, data.get("image") or None, data.get("mode", "full"))
+    return err if err else jsonify(result)
+
+
+@app.post("/query")
+def query():
+    """Answer a free-form question about a set of markers.
+
+    Body (JSON):
+        markers : list[str]  – e.g. ["SOX10:#FFFF00", "PRAME:#FF0000"]  (required)
+        query   : str        – the question to answer  (required)
+        mode    : str        – "full" | "db" | "minimal"; controls max_steps
+        image   : str        – base64-encoded image (optional)
+
+    Returns: {"answer": "..."}
+    """
+    err = _check_init()
+    if err:
+        return err
+
+    data = request.get_json(force=True, silent=True) or {}
+    markers = data.get("markers")
+    question = data.get("query")
+    if not markers:
+        return jsonify({"error": "Missing required field: 'markers'"}), 400
+    if not question:
+        return jsonify({"error": "Missing required field: 'query'"}), 400
+
+    task_json = {"task": "query", "markers": markers, "query": question}
+    result, err = _run(task_json, data.get("image") or None, data.get("mode", "full"))
+    return err if err else jsonify(result)
 
 
 def start_server(port: int = 5000, debug: bool = False):
