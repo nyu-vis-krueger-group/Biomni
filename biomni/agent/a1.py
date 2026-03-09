@@ -65,6 +65,8 @@ class A1:
         api_key: str | None = None,
         commercial_mode: bool | None = None,
         expected_data_lake_files: list | None = None,
+        mode: str = "full",
+        custom_prompt: str | None = None,
     ):
         """Initialize the biomni agent.
 
@@ -77,6 +79,11 @@ class A1:
             base_url: Base URL for custom model serving (e.g., "http://localhost:8000/v1")
             api_key: API key for the custom LLM
             commercial_mode: If True, excludes datasets that require commercial licenses or are non-commercial only
+            mode: Agent operation mode. One of:
+                "full"    - All tools, data lake, literature/web search (default)
+                "db"      - Data lake and documents only; no web/literature search
+                "minimal" - Direct LLM call only; no tools, data lookup, or search
+            custom_prompt: Optional text prepended to the system prompt.
 
         """
         # Use default_config values for unspecified parameters
@@ -112,6 +119,12 @@ class A1:
         self.library_content_dict = library_content_dict
         self.commercial_mode = commercial_mode
 
+        _valid_modes = {"full", "db", "minimal"}
+        if mode not in _valid_modes:
+            raise ValueError(f"Invalid mode '{mode}'. Must be one of: {_valid_modes}")
+        self.mode = mode
+        self.custom_prompt = custom_prompt
+
         # Display configuration in a nice, readable format
         print("\n" + "=" * 50)
         print("🔧 BIOMNI CONFIGURATION")
@@ -132,6 +145,9 @@ class A1:
                     print(f"  {key.replace('_', ' ').title()}: {mode_text}")
                 else:
                     print(f"  {key.replace('_', ' ').title()}: {value}")
+
+        _mode_labels = {"full": "Full (all tools + data lake + search)", "db": "DB (data lake only, no web/literature search)", "minimal": "Minimal (direct LLM, no tools or data)"}
+        print(f"\n⚙️  AGENT MODE: {_mode_labels[self.mode]}")
 
         # Show agent-specific LLM if different from default
         if agent_llm != default_config.llm or agent_source != default_config.source:
@@ -906,6 +922,7 @@ class A1:
         custom_data=None,
         custom_software=None,
         know_how_docs=None,
+        mode="full",
     ):
         """Generate the system prompt based on the provided resources.
 
@@ -1148,10 +1165,19 @@ In each response, you must include EITHER <execute> or <solution> tag. Not both 
 You may or may not receive feedbacks from human. If so, address the feedbacks by following the same procedure of multiple rounds of thinking, execution, and then coming up with a new solution.
 """
 
-        # Add protocol generation instructions
-        prompt_modifier += """
+        # Add protocol generation instructions (not relevant in db mode)
+        if mode not in ("db",):
+            prompt_modifier += """
 PROTOCOL GENERATION:
 If the user requests an experimental protocol, use search_protocols(), advanced_web_search_claude(), list_local_protocols(), and read_local_protocol() to generate an accurate protocol. Include details such as reagents (with catalog numbers if available), equipment specifications, replicate requirements, error handling, and troubleshooting - but ONLY include information found in these resources. Do not make up specifications, catalog numbers, or equipment details. Prioritize accuracy over completeness.
+"""
+
+        if mode == "db":
+            prompt_modifier += """
+DATA LAKE MODE:
+You are operating in data lake mode. You MUST only use data from the available data lake files listed below.
+Do NOT call any external search functions, literature databases, web search, or API services (e.g. do not use query_pubmed, query_arxiv, search_google, advanced_web_search_claude, or any similar function).
+Restrict your analysis strictly to the provided data lake files and any user-uploaded datasets.
 """
 
         # Add custom resources section first (highlighted)
@@ -1300,27 +1326,33 @@ Each library is listed with its description to help you understand its functiona
         # Get data lake content
         data_lake_path = self.path + "/data_lake"
         data_lake_content = glob.glob(data_lake_path + "/*")
-        data_lake_items = [x.split("/")[-1] for x in data_lake_content]
+        data_lake_items = [os.path.basename(x) for x in data_lake_content]
 
         # data_lake_dict and library_content_dict are already set in __init__
 
         # Prepare tool descriptions
         tool_desc = {i: [x for x in j if x["name"] != "run_python_repl"] for i, j in self.module2api.items()}
 
+        # Apply mode-based filtering
+        # db and minimal both suppress all tool descriptions; db still exposes the data lake
+        if self.mode in ("minimal", "db"):
+            tool_desc = {}
+
         # Prepare data lake items with descriptions
         data_lake_with_desc = []
-        for item in data_lake_items:
-            description = self.data_lake_dict.get(item, f"Data lake item: {item}")
-            data_lake_with_desc.append({"name": item, "description": description})
+        if self.mode != "minimal":
+            for item in data_lake_items:
+                description = self.data_lake_dict.get(item, f"Data lake item: {item}")
+                data_lake_with_desc.append({"name": item, "description": description})
 
-        # Add custom data items if they exist
-        if hasattr(self, "_custom_data") and self._custom_data:
-            for name, info in self._custom_data.items():
-                data_lake_with_desc.append({"name": name, "description": info["description"]})
+            # Add custom data items if they exist
+            if hasattr(self, "_custom_data") and self._custom_data:
+                for name, info in self._custom_data.items():
+                    data_lake_with_desc.append({"name": name, "description": info["description"]})
 
         # Prepare library content list including custom software
-        library_content_list = list(self.library_content_dict.keys())
-        if hasattr(self, "_custom_software") and self._custom_software:
+        library_content_list = [] if self.mode == "minimal" else list(self.library_content_dict.keys())
+        if self.mode != "minimal" and hasattr(self, "_custom_software") and self._custom_software:
             for name in self._custom_software:
                 if name not in library_content_list:  # Avoid duplicates
                     library_content_list.append(name)
@@ -1351,7 +1383,7 @@ Each library is listed with its description to help you understand its functiona
         # Load ALL know-how documents into initial system prompt
         # This makes best practices always available, not just when retrieved
         know_how_docs = []
-        if hasattr(self, "know_how_loader") and self.know_how_loader.documents:
+        if self.mode == "full" and hasattr(self, "know_how_loader") and self.know_how_loader.documents:
             for _doc_id, doc in self.know_how_loader.documents.items():
                 # Use content without metadata for efficiency
                 know_how_docs.append(
@@ -1365,17 +1397,26 @@ Each library is listed with its description to help you understand its functiona
                 )
             print(f"📚 Loading {len(know_how_docs)} know-how documents into system prompt")
 
-        self.system_prompt = self._generate_system_prompt(
-            tool_desc=tool_desc,
-            data_lake_content=data_lake_with_desc,
-            library_content_list=library_content_list,
-            self_critic=self_critic,
-            is_retrieval=False,
-            custom_tools=custom_tools if custom_tools else None,
-            custom_data=custom_data if custom_data else None,
-            custom_software=custom_software if custom_software else None,
-            know_how_docs=know_how_docs if know_how_docs else None,
-        )
+        if self.mode == "minimal":
+            base_prompt = "You are a helpful biomedical AI assistant. Answer the user's question directly and thoroughly."
+        else:
+            base_prompt = self._generate_system_prompt(
+                tool_desc=tool_desc,
+                data_lake_content=data_lake_with_desc,
+                library_content_list=library_content_list,
+                self_critic=self_critic,
+                is_retrieval=False,
+                custom_tools=custom_tools if custom_tools else None,
+                custom_data=custom_data if custom_data else None,
+                custom_software=custom_software if custom_software else None,
+                know_how_docs=know_how_docs if know_how_docs else None,
+                mode=self.mode,
+            )
+
+        if self.custom_prompt:
+            self.system_prompt = self.custom_prompt.rstrip() + "\n\n" + base_prompt
+        else:
+            self.system_prompt = base_prompt
 
         # Define the nodes
         def generate(state: AgentState) -> AgentState:
@@ -1656,13 +1697,13 @@ Each library is listed with its description to help you understand its functiona
             return None
 
         # Gather all available resources
-        # 1. Tools from the registry
-        all_tools = self.tool_registry.tools if hasattr(self, "tool_registry") else []
+        # 1. Tools from the registry (db mode exposes no tools; full mode exposes all)
+        all_tools = [] if self.mode == "db" else (self.tool_registry.tools if hasattr(self, "tool_registry") else [])
 
         # 2. Data lake items with descriptions
         data_lake_path = self.path + "/data_lake"
         data_lake_content = glob.glob(data_lake_path + "/*")
-        data_lake_items = [x.split("/")[-1] for x in data_lake_content]
+        data_lake_items = [os.path.basename(x) for x in data_lake_content]
 
         # Create data lake descriptions for retrieval
         data_lake_descriptions = []
@@ -1756,6 +1797,10 @@ Each library is listed with its description to help you understand its functiona
 
         return selected_resources_names
 
+    def get_system_prompt(self):
+        """Return the current system prompt."""
+        return self.system_prompt
+
     def go(self, prompt, max_steps=30):
         """Execute the agent with the given prompt.
 
@@ -1766,6 +1811,17 @@ Each library is listed with its description to help you understand its functiona
         """
         self.critic_count = 0
         self.user_task = prompt
+
+        # Minimal mode: direct LLM call, no tools, no workflow
+        if self.mode == "minimal":
+            self.log = []
+            messages = [SystemMessage(content=self.system_prompt), HumanMessage(content=prompt)]
+            # Invoke without stop sequences so the response is never cut off mid-sentence
+            response = self.llm.invoke(messages, stop=None)
+            content = response.content if hasattr(response, "content") else str(response)
+            self.log.append(content)
+            self._conversation_state = None
+            return self.log, content
 
         if self.use_tool_retriever:
             selected_resources_names = self._prepare_resources_for_retrieval(prompt)
@@ -1933,7 +1989,11 @@ Each library is listed with its description to help you understand its functiona
             custom_data=custom_data if custom_data else None,
             custom_software=custom_software if custom_software else None,
             know_how_docs=know_how_docs if know_how_docs else None,
+            mode=self.mode,
         )
+
+        if self.custom_prompt:
+            self.system_prompt = self.custom_prompt.rstrip() + "\n\n" + self.system_prompt
 
         # Print the raw system prompt for debugging
         # print("\n" + "="*20 + " RAW SYSTEM PROMPT FROM AGENT " + "="*20)
