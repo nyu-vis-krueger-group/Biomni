@@ -124,14 +124,28 @@ def _run(task_json: dict, image_b64: str | None, mode: str) -> tuple:
         return None, (jsonify({"error": str(e)}), 500)
 
 
+def _extract_common(data: dict) -> tuple[list | None, dict | None, str | None, str]:
+    """Extract and validate fields shared by all task endpoints.
+
+    Returns (markers, channel_stats, image_b64, mode).
+    markers is None when missing so callers can return an error.
+    """
+    markers = data.get("markers") or None
+    channel_stats = data.get("channel_stats") or None
+    image_b64 = data.get("image") or None
+    mode = data.get("mode", "full")
+    return markers, channel_stats, image_b64, mode
+
+
 @app.post("/label")
 def label():
     """Generate biological labels for a set of markers.
 
     Body (JSON):
-        markers : list[str]  – e.g. ["SOX10:#FFFF00", "PRAME:#FF0000"]  (required)
-        mode    : str        – "full" | "db" | "minimal"; controls max_steps
-        image   : str        – base64-encoded image (optional)
+        markers       : list[str]  – e.g. ["SOX10:#FFFF00", "PRAME:#FF0000"]  (required)
+        channel_stats : dict       – full channel statistics for the region      (required)
+        mode          : str        – "full" | "db" | "minimal"
+        image         : str        – base64-encoded JPEG or PNG                 (optional)
 
     Returns: {"labels": {...}, "overall": [...]}
     """
@@ -140,12 +154,14 @@ def label():
         return err
 
     data = request.get_json(force=True, silent=True) or {}
-    markers = data.get("markers")
+    markers, channel_stats, image_b64, mode = _extract_common(data)
     if not markers:
         return jsonify({"error": "Missing required field: 'markers'"}), 400
+    if not channel_stats:
+        return jsonify({"error": "Missing required field: 'channel_stats'"}), 400
 
-    task_json = {"task": "label", "markers": markers}
-    result, err = _run(task_json, data.get("image") or None, data.get("mode", "full"))
+    task_json = {"task": "label", "markers": markers, "channel_stats": channel_stats}
+    result, err = _run(task_json, image_b64, mode)
     return err if err else jsonify(result)
 
 
@@ -154,10 +170,11 @@ def query():
     """Answer a free-form question about a set of markers.
 
     Body (JSON):
-        markers : list[str]  – e.g. ["SOX10:#FFFF00", "PRAME:#FF0000"]  (required)
-        query   : str        – the question to answer  (required)
-        mode    : str        – "full" | "db" | "minimal"; controls max_steps
-        image   : str        – base64-encoded image (optional)
+        markers       : list[str]  – e.g. ["SOX10:#FFFF00", "PRAME:#FF0000"]  (required)
+        query         : str        – the question to answer                     (required)
+        channel_stats : dict       – full channel statistics for the region     (required)
+        mode          : str        – "full" | "db" | "minimal"
+        image         : str        – base64-encoded JPEG or PNG                 (optional)
 
     Returns: {"answer": "..."}
     """
@@ -166,15 +183,45 @@ def query():
         return err
 
     data = request.get_json(force=True, silent=True) or {}
-    markers = data.get("markers")
-    question = data.get("query")
+    markers, channel_stats, image_b64, mode = _extract_common(data)
+    question = data.get("query") or None
     if not markers:
         return jsonify({"error": "Missing required field: 'markers'"}), 400
     if not question:
         return jsonify({"error": "Missing required field: 'query'"}), 400
+    if not channel_stats:
+        return jsonify({"error": "Missing required field: 'channel_stats'"}), 400
 
-    task_json = {"task": "query", "markers": markers, "query": question}
-    result, err = _run(task_json, data.get("image") or None, data.get("mode", "full"))
+    task_json = {"task": "query", "markers": markers, "query": question, "channel_stats": channel_stats}
+    result, err = _run(task_json, image_b64, mode)
+    return err if err else jsonify(result)
+
+
+@app.post("/suggest")
+def suggest():
+    """Recommend additional channels to enable alongside the currently selected markers.
+
+    Body (JSON):
+        markers       : list[str]  – currently selected markers                 (required)
+        channel_stats : dict       – full channel statistics for the region     (required)
+        mode          : str        – "full" | "db" | "minimal"
+        image         : str        – base64-encoded JPEG or PNG                 (optional)
+
+    Returns: {"suggestions": [{"channel": str, "reason": str, "priority": str}, ...]}
+    """
+    err = _check_init()
+    if err:
+        return err
+
+    data = request.get_json(force=True, silent=True) or {}
+    markers, channel_stats, image_b64, mode = _extract_common(data)
+    if not markers:
+        return jsonify({"error": "Missing required field: 'markers'"}), 400
+    if not channel_stats:
+        return jsonify({"error": "Missing required field: 'channel_stats'"}), 400
+
+    task_json = {"task": "suggest", "markers": markers, "channel_stats": channel_stats}
+    result, err = _run(task_json, image_b64, mode)
     return err if err else jsonify(result)
 
 
