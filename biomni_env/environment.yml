@@ -37,3 +37,14 @@ dependencies:
       - mcp
       - tooluniverse
       - python-dotenv
+      # data lake / file formats
+      - pyarrow>=15.0.0  # >=15 required for NumPy 2.x compatibility
+      - fastparquet
+      # literature & web search tools
+      - pymed
+      - googlesearch-python
+      - PyPDF2
+      # image handling
+      - pillow
+      # biomni server
+      - flask

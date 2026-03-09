@@ -3,7 +3,7 @@
 .env
 debug*
 .*
-bioset_biomni
+bioset_biomni/data
 system_prompt.txt
 # Byte-compiled / optimized / DLL files
 biomni_release/biomni_env/biomni_tools/
