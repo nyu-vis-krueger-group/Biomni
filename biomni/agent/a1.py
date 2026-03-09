@@ -1548,7 +1548,7 @@ Each library is listed with its description to help you understand its functiona
                 self._execution_results.append(execution_entry)
 
                 observation = f"\n<observation>{result}</observation>"
-                state["messages"].append(AIMessage(content=observation.strip()))
+                state["messages"].append(HumanMessage(content=observation.strip()))
 
             return state
 
@@ -1756,11 +1756,12 @@ Each library is listed with its description to help you understand its functiona
 
         return selected_resources_names
 
-    def go(self, prompt):
+    def go(self, prompt, max_steps=30):
         """Execute the agent with the given prompt.
 
         Args:
             prompt: The user's query
+            max_steps: Maximum number of node transitions before stopping (default 30)
 
         """
         self.critic_count = 0
@@ -1771,7 +1772,7 @@ Each library is listed with its description to help you understand its functiona
             self.update_system_prompt_with_selected_resources(selected_resources_names)
 
         inputs = {"messages": [HumanMessage(content=prompt)], "next_step": None}
-        config = {"recursion_limit": 500, "configurable": {"thread_id": 42}}
+        config = {"recursion_limit": max_steps, "configurable": {"thread_id": 42}}
         self.log = []
 
         # Store the final conversation state for markdown generation
