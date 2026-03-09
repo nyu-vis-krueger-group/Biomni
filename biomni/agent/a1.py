@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
 
 from biomni.config import default_config
@@ -1834,11 +1835,33 @@ Each library is listed with its description to help you understand its functiona
         # Store the final conversation state for markdown generation
         final_state = None
 
-        for s in self.app.stream(inputs, stream_mode="values", config=config):
-            message = s["messages"][-1]
-            out = pretty_print(message)
-            self.log.append(out)
-            final_state = s  # Store the latest state
+        try:
+            for s in self.app.stream(inputs, stream_mode="values", config=config):
+                message = s["messages"][-1]
+                out = pretty_print(message)
+                self.log.append(out)
+                final_state = s
+        except GraphRecursionError:
+            print(f"\n[Step limit of {max_steps} reached — synthesizing answer from gathered information...]\n")
+            history = final_state["messages"] if final_state else [HumanMessage(content=prompt)]
+            synthesis_system = SystemMessage(
+                content="You are a helpful biomedical AI assistant. Provide a direct, plain-text answer only. Do NOT use <execute>, <solution>, or any XML tags. Do not write code."
+            )
+            synthesis_prompt = (
+                f"You have been researching the following task:\n{prompt}\n\n"
+                "You have reached the step limit before completing your plan. "
+                "Based on everything you have gathered so far, provide the best possible final answer. "
+                "Be direct and summarise your findings. Do not write any code or tool calls."
+            )
+            synthesis = self.llm.invoke(
+                [synthesis_system] + history + [HumanMessage(content=synthesis_prompt)],
+                stop=None,
+            )
+            content = synthesis.content if hasattr(synthesis, "content") else str(synthesis)
+            print(content)
+            self.log.append(content)
+            self._conversation_state = final_state
+            return self.log, content
 
         # Store the conversation state for markdown generation
         self._conversation_state = final_state
