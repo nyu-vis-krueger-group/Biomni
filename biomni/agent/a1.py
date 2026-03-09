@@ -1802,7 +1802,36 @@ Each library is listed with its description to help you understand its functiona
         """Return the current system prompt."""
         return self.system_prompt
 
-    def go(self, prompt, max_steps=30):
+    def _build_human_message(self, prompt: str, image=None) -> HumanMessage:
+        """Build a HumanMessage, optionally with an attached image.
+
+        Args:
+            prompt: The text query.
+            image: Optional image. Accepts a file path (str/Path) or a base64-encoded string.
+                   Supported formats: JPEG, PNG, GIF, WebP.
+        """
+        if image is None:
+            return HumanMessage(content=prompt)
+
+        import base64
+        import mimetypes
+
+        if isinstance(image, (str, Path)) and os.path.isfile(image):
+            mime, _ = mimetypes.guess_type(str(image))
+            mime = mime or "image/jpeg"
+            with open(image, "rb") as f:
+                image_data = base64.standard_b64encode(f.read()).decode("utf-8")
+        else:
+            # Assume already base64-encoded; default to JPEG
+            image_data = image if isinstance(image, str) else image.decode("utf-8")
+            mime = "image/jpeg"
+
+        return HumanMessage(content=[
+            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_data}"}},
+            {"type": "text", "text": prompt},
+        ])
+
+    def go(self, prompt, image=None, max_steps=30):
         """Execute the agent with the given prompt.
 
         Args:
@@ -1816,7 +1845,7 @@ Each library is listed with its description to help you understand its functiona
         # Minimal mode: direct LLM call, no tools, no workflow
         if self.mode == "minimal":
             self.log = []
-            messages = [SystemMessage(content=self.system_prompt), HumanMessage(content=prompt)]
+            messages = [SystemMessage(content=self.system_prompt), self._build_human_message(prompt, image)]
             # Invoke without stop sequences so the response is never cut off mid-sentence
             response = self.llm.invoke(messages, stop=None)
             content = response.content if hasattr(response, "content") else str(response)
@@ -1828,7 +1857,7 @@ Each library is listed with its description to help you understand its functiona
             selected_resources_names = self._prepare_resources_for_retrieval(prompt)
             self.update_system_prompt_with_selected_resources(selected_resources_names)
 
-        inputs = {"messages": [HumanMessage(content=prompt)], "next_step": None}
+        inputs = {"messages": [self._build_human_message(prompt, image)], "next_step": None}
         config = {"recursion_limit": max_steps, "configurable": {"thread_id": 42}}
         self.log = []
 
