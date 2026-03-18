@@ -181,7 +181,7 @@ def label():
 
     Body (JSON):
         markers       : list[str]  – e.g. ["SOX10:#FFFF00", "PRAME:#FF0000"]  (required)
-        channel_stats : dict       – full channel statistics for the region      (required)
+        channel_stats : dict       – full channel statistics for the region      (optional)
         mode          : str        – "full" | "db" | "minimal"
         image         : str        – base64-encoded JPEG or PNG                 (optional)
 
@@ -195,10 +195,10 @@ def label():
     markers, channel_stats, image_b64, mode = _extract_common(data)
     if not markers:
         return jsonify({"error": "Missing required field: 'markers'"}), 400
-    if not channel_stats:
-        return jsonify({"error": "Missing required field: 'channel_stats'"}), 400
 
-    task_json = {"task": "label", "markers": markers, "channel_stats": channel_stats}
+    task_json = {"task": "label", "markers": markers}
+    if channel_stats:
+        task_json["channel_stats"] = channel_stats
     result, err = _run(task_json, image_b64, mode)
     return err if err else jsonify(result)
 
@@ -210,7 +210,7 @@ def query():
     Body (JSON):
         markers       : list[str]  – e.g. ["SOX10:#FFFF00", "PRAME:#FF0000"]  (required)
         query         : str        – the question to answer                     (required)
-        channel_stats : dict       – full channel statistics for the region     (required)
+        channel_stats : dict       – full channel statistics for the region     (optional)
         mode          : str        – "full" | "db" | "minimal"
         image         : str        – base64-encoded JPEG or PNG                 (optional)
 
@@ -227,10 +227,10 @@ def query():
         return jsonify({"error": "Missing required field: 'markers'"}), 400
     if not question:
         return jsonify({"error": "Missing required field: 'query'"}), 400
-    if not channel_stats:
-        return jsonify({"error": "Missing required field: 'channel_stats'"}), 400
 
-    task_json = {"task": "query", "markers": markers, "query": question, "channel_stats": channel_stats}
+    task_json = {"task": "query", "markers": markers, "query": question}
+    if channel_stats:
+        task_json["channel_stats"] = channel_stats
     result, err = _run(task_json, image_b64, mode)
     return err if err else jsonify(result)
 
@@ -241,7 +241,7 @@ def suggest():
 
     Body (JSON):
         markers       : list[str]  – currently selected markers                 (required)
-        channel_stats : dict       – full channel statistics for the region     (required)
+        channel_stats : dict       – full channel statistics for the region     (optional)
         mode          : str        – "full" | "db" | "minimal"
         image         : str        – base64-encoded JPEG or PNG                 (optional)
 
@@ -255,10 +255,10 @@ def suggest():
     markers, channel_stats, image_b64, mode = _extract_common(data)
     if not markers:
         return jsonify({"error": "Missing required field: 'markers'"}), 400
-    if not channel_stats:
-        return jsonify({"error": "Missing required field: 'channel_stats'"}), 400
 
-    task_json = {"task": "suggest", "markers": markers, "channel_stats": channel_stats}
+    task_json = {"task": "suggest", "markers": markers}
+    if channel_stats:
+        task_json["channel_stats"] = channel_stats
     result, err = _run(task_json, image_b64, mode)
     return err if err else jsonify(result)
 
