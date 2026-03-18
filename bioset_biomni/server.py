@@ -7,6 +7,7 @@ from pathlib import Path
 from flask import Flask, jsonify, request
 
 from biomni.agent import A1
+from biomni.config import default_config
 from bioset_biomni.prompt import DEFAULT_DATASET, build_prompt
 
 app = Flask(__name__)
@@ -72,7 +73,8 @@ def init():
     """Initialise the A1 agent.
 
     Body (JSON, all optional):
-        llm     : model id (default: claude-sonnet-4-6)
+        llm     : model id for the main agent (default: claude-sonnet-4-6)
+        db_llm  : model id for database queries (default: same as llm)
         mode    : "full" | "db" | "minimal"  (default: "full")
         dataset : dataset description used to specialise the prompt
                   (default: "melanoma CyCIF")
@@ -81,6 +83,7 @@ def init():
     data = request.get_json(force=True, silent=True) or {}
 
     llm = data.get("llm", "claude-sonnet-4-6")
+    db_llm = data.get("db_llm") or llm
     mode = data.get("mode", "full")
     dataset = data.get("dataset", DEFAULT_DATASET)
     api_key = data.get("api_key") or None
@@ -88,6 +91,7 @@ def init():
     global _agent
     with _agent_lock:
         try:
+            default_config.llm = db_llm
             kwargs = dict(llm=llm, mode=mode, custom_prompt=build_prompt(dataset))
             if api_key:
                 kwargs["api_key"] = api_key
