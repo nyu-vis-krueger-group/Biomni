@@ -141,6 +141,40 @@ def _extract_common(data: dict) -> tuple[list | None, dict | None, str | None, s
     return markers, channel_stats, image_b64, mode
 
 
+@app.post("/upload")
+def upload():
+    """Upload a dataset file and register it with the agent.
+
+    Multipart form fields:
+        file        : the dataset file (required)
+        description : plain-text description of the dataset (required)
+
+    Returns: {"status": "ok", "filename": "<saved filename>"}
+    """
+    err = _check_init()
+    if err:
+        return err
+
+    if "file" not in request.files:
+        return jsonify({"error": "Missing required field: 'file'"}), 400
+    description = request.form.get("description") or ""
+    if not description:
+        return jsonify({"error": "Missing required field: 'description'"}), 400
+
+    f = request.files["file"]
+    if not f.filename:
+        return jsonify({"error": "Uploaded file has no filename"}), 400
+
+    _DATA_DIR.mkdir(parents=True, exist_ok=True)
+    dest = _DATA_DIR / f.filename
+    f.save(str(dest))
+
+    with _agent_lock:
+        _agent.add_data({str(dest): description})
+
+    return jsonify({"status": "ok", "filename": f.filename})
+
+
 @app.post("/label")
 def label():
     """Generate biological labels for a set of markers.
