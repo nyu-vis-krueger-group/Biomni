@@ -1816,15 +1816,40 @@ Each library is listed with its description to help you understand its functiona
         import base64
         import mimetypes
 
+        def _detect_mime_from_bytes(raw: bytes) -> str:
+            """Best-effort image MIME detection from magic bytes."""
+            if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+                return "image/png"
+            if raw.startswith(b"\xff\xd8\xff"):
+                return "image/jpeg"
+            if raw.startswith(b"GIF87a") or raw.startswith(b"GIF89a"):
+                return "image/gif"
+            if len(raw) >= 12 and raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+                return "image/webp"
+            return "image/jpeg"
+
         if isinstance(image, (str, Path)) and os.path.isfile(image):
             mime, _ = mimetypes.guess_type(str(image))
             mime = mime or "image/jpeg"
             with open(image, "rb") as f:
                 image_data = base64.standard_b64encode(f.read()).decode("utf-8")
         else:
-            # Assume already base64-encoded; default to JPEG
+            # Assume already base64-encoded and infer image type from decoded bytes.
             image_data = image if isinstance(image, str) else image.decode("utf-8")
-            mime = "image/jpeg"
+            if image_data.startswith("data:"):
+                # Accept full data URLs as-is when callers pass them.
+                header, _, maybe_b64 = image_data.partition(",")
+                if ";base64" in header and maybe_b64:
+                    mime = header.split(":", 1)[1].split(";", 1)[0]
+                    image_data = maybe_b64
+                else:
+                    mime = "image/jpeg"
+            else:
+                try:
+                    raw = base64.b64decode(image_data, validate=False)
+                    mime = _detect_mime_from_bytes(raw)
+                except Exception:
+                    mime = "image/jpeg"
 
         return HumanMessage(content=[
             {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_data}"}},
