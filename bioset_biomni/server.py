@@ -225,6 +225,50 @@ def suggest():
     return err if err else jsonify(result)
 
 
+@app.post("/plot")
+def plot():
+    """Explain the currently displayed UpSet or bar plot.
+
+    Body (JSON):
+        plot          : dict       – complete plot payload for current UI state (required)
+        markers       : list[str]  – active markers with colors               (optional)
+        channel_stats : dict       – full channel statistics for the region    (optional)
+        query         : str        – optional user question about the plot      (optional)
+        mode          : str        – "full" | "db" | "minimal"
+        image         : str        – base64-encoded JPEG or PNG                (optional)
+
+    Returns: {"answer": "..."}
+    """
+    err = _check_init()
+    if err:
+        return err
+
+    data = request.get_json(force=True, silent=True) or {}
+
+    plot_payload = data.get("plot")
+    if not isinstance(plot_payload, dict) or not plot_payload:
+        return jsonify({"error": "Missing required field: 'plot' (non-empty object)"}), 400
+
+    mode = data.get("mode", "full")
+    image_b64 = data.get("image") or None
+    markers = data.get("markers") or []
+    channel_stats = data.get("channel_stats")
+    question = data.get("query") or None
+
+    task_json = {
+        "task": "plot",
+        "plot": plot_payload,
+        "markers": markers,
+    }
+    if channel_stats is not None:
+        task_json["channel_stats"] = channel_stats
+    if question:
+        task_json["query"] = question
+
+    result, err = _run(task_json, image_b64, mode)
+    return err if err else jsonify(result)
+
+
 def start_server(port: int = 5000, debug: bool = False):
     """Start the Biomni Flask server.
 
