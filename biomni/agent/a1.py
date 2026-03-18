@@ -1822,9 +1822,17 @@ Each library is listed with its description to help you understand its functiona
             with open(image, "rb") as f:
                 image_data = base64.standard_b64encode(f.read()).decode("utf-8")
         else:
-            # Assume already base64-encoded; default to JPEG
+            # Assume already base64-encoded; detect format from magic bytes
             image_data = image if isinstance(image, str) else image.decode("utf-8")
-            mime = "image/jpeg"
+            raw = base64.standard_b64decode(image_data[:16])
+            if raw[:4] == b'\x89PNG':
+                mime = "image/png"
+            elif raw[:6] in (b'GIF87a', b'GIF89a'):
+                mime = "image/gif"
+            elif raw[:4] == b'RIFF' and raw[8:12] == b'WEBP':
+                mime = "image/webp"
+            else:
+                mime = "image/jpeg"
 
         return HumanMessage(content=[
             {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_data}"}},
