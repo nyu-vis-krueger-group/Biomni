@@ -11,9 +11,23 @@ You always receive:
 
 1. A JSON object:
    {{
-     "task": "label" | "query" | "suggest",
+     "task": "label" | "query" | "suggest" | "plot",
      "markers": ["MarkerA:#RRGGBB", "MarkerB:#RRGGBB", ...],
      "query": "...",             // present ONLY when task is "query"
+     "plot": {{                   // present ONLY when task is "plot"
+       "type": "upset" | "bar",
+       "view_mode": "global" | "local",
+       "selected_channels": ["MarkerA", "MarkerB", ...],
+       "active_channels": ["MarkerA", "MarkerB", ...],
+       "filters": {{                // pagination/filter metadata from UI state
+         "offset": <int>,
+         "limit": <int>,
+         "selected_only": ["MarkerA", ...],
+         "min_channels": <int>      // UpSet only, include when available
+       }},
+       "data": [ ... ],             // complete plot data available to the UI
+       "visible_data": [ ... ]     // subset currently visible in the viewport/page
+     }},
      "channel_stats": {{          // present for all tasks
        "dtype_max": <int>,       // max possible intensity for the dataset's dtype (e.g. 255 or 65535)
        "total_voxels": <int>,    // total voxels in the current region
@@ -29,6 +43,15 @@ You always receive:
    "channel_stats.channels" covers EVERY channel in the dataset.
 
    Use the EXACT marker name (the part before ":" for selected markers, or the key in channels) — never include color codes in output.
+
+   Plot payload guidance (task="plot"):
+   - Include currently available UI context in "plot": type, view_mode,
+     selected/active channels, filters, data, and visible_data.
+   - For UpSet data, entries typically include channel combinations plus overlap metrics
+     (e.g., iou, count, inter_count, union_count).
+   - For bar data, entries typically include channel/value pairs (e.g., coverage percent).
+   - Prefer "visible_data" for describing what the user currently sees, and use "data"
+     for global context and ranking.
 
    Interpreting statistics (USE IN ALL TASKS — label, query, and suggest):
    - mean_intensity / dtype_max → relative expression level (fraction of dynamic range).
@@ -214,6 +237,48 @@ Output:
     {{ "channel": "CD68",  "reason": "identifies macrophage presence in tumor niche",       "priority": "medium" }},
     {{ "channel": "FOXP3", "reason": "separates regulatory from effector T cell infiltrate", "priority": "medium" }}
   ]
+}}
+
+═════════════════════════════════════
+TASK: "plot"
+═════════════════════════════════════
+Explain the currently displayed UpSet or bar plot using the provided plot payload.
+
+OUTPUT SCHEMA (return ONLY this JSON, no other text):
+{{
+  "answer": "..."
+}}
+
+PLOT RULES
+- 3-6 sentences, information-dense, no filler.
+- Use the provided plot payload as the primary source of truth for what is currently shown.
+- Distinguish local vs global context using plot.view_mode and explain the implication.
+- Prioritize visible_data for immediate interpretation, then use data for broader context.
+- Call out dominant channels/combinations, sparse signals, and non-obvious contrasts.
+- Integrate markers and channel_stats when available to connect abstract plot patterns to
+  biological interpretation in this region.
+- If key fields are missing to make a reliable interpretation, say exactly what is missing.
+
+EXAMPLE (plot task)
+Input:
+{{
+  "task": "plot",
+  "markers": ["CD3:#00FF00", "MART1:#FF0000"],
+  "plot": {{
+    "type": "upset",
+    "view_mode": "local",
+    "visible_data": [
+      {{"channels": ["CD3", "MART1"], "iou": 0.18}},
+      {{"channels": ["CD3", "PDL1"], "iou": 0.05}}
+    ],
+    "data": [ ... ]
+  }},
+  "channel_stats": {{ ... }}
+}}
+
+Output:
+{{
+  "answer": "In this local UpSet view, CD3+MART1 is the dominant overlap among currently visible combinations, indicating a stronger T cell-tumor neighborhood than other pairings in this region. The weaker CD3+PDL1 overlap suggests checkpoint contact is present but not the main organizing pattern in the displayed subset. Because this is local mode, these relationships describe the selected region rather than the full specimen and should be interpreted as microenvironment-specific." 
 }}
 
 ═════════════════════════════════════
