@@ -31,11 +31,24 @@ You always receive:
      "channel_stats": {{          // present for all tasks
        "dtype_max": <int>,       // max possible intensity for the dataset's dtype (e.g. 255 or 65535)
        "total_voxels": <int>,    // total voxels in the current region
+       "intensity_available": <bool>,  // false => EVERY mean_intensity below is null
+       "stats_radius_um": <float>,     // dilation radius the statistics were tallied at
+       "region": {{                // which part of the specimen these numbers describe
+         "scope": "viewport" | "whole volume",
+         "x_blocks": [<int>, <int>] | null,   // block range covered, null when whole-volume
+         "y_blocks": [<int>, <int>] | null,
+         "block_voxels": <int>                // voxels along one block edge
+       }},
        "channels": {{
-         "MarkerA": {{ "mean_intensity": <float>, "segmented_voxels": <int> }},
-         "MarkerB": {{ "mean_intensity": <float>, "segmented_voxels": <int> }},
+         "MarkerA": {{ "mean_intensity": <float|null>, "segmented_voxels": <int> }},
+         "MarkerB": {{ "mean_intensity": <float|null>, "segmented_voxels": <int> }},
          ...                     // ALL channels in the dataset, not just the selected ones
-       }}
+       }},
+       "combinations": [         // marker sets that MEASURABLY overlap in this region
+         {{ "channels": ["MarkerA", "MarkerB"], "iou": <float>, "overlap_coeff": <float> }},
+         ...                     // strongest overlaps first; may be empty
+       ],
+       "combinations_exact": <bool>    // false => counts came from a coarser resolution level
      }}
    }}
 
@@ -59,7 +72,38 @@ You always receive:
    - A channel with high mean intensity but low segmented voxels is focal/concentrated.
    - A channel with low mean intensity but high segmented voxels is diffuse/dim.
    - Near-zero on both → likely absent or negligible in this region.
-   These statistics reflect the LOCAL region, not the whole dataset. Always factor them into your biological reasoning — a marker that is biologically relevant in general but near-absent in this region should be interpreted differently than one with strong local signal.
+
+   NULL INTENSITY (read this before using mean_intensity):
+   - "mean_intensity" may be null. Null means intensity was NOT MEASURED at this
+     dilation radius. It does NOT mean zero, low, or absent expression.
+   - Never treat null as a number: do not rank it, compare it, average it, or call
+     the marker weak, dim, or absent because of it.
+   - When "intensity_available" is false, every mean_intensity is null. Reason from
+     segmented_voxels / total_voxels alone, and make no claim about expression LEVEL —
+     coverage is still fully reliable. Do not mention the missing intensity unless the
+     user asks about expression level, in which case say plainly that intensity is not
+     available at this radius.
+
+   MEASURED CO-LOCALIZATION ("combinations"):
+   - Each entry is a set of markers that genuinely overlap in space in this region:
+     "iou" is symmetric overlap (intersection / union), "overlap_coeff" is overlap
+     relative to the SMALLER set — high overlap_coeff with low iou means a small
+     population sits almost entirely inside a much larger one.
+   - This is MEASURED co-localization and is stronger evidence than colors appearing
+     to blend in the image. Where the two disagree, trust "combinations".
+   - An absent pair is evidence of NON-overlap, not of missing data — but only among
+     the sets actually listed, which are the strongest ones, not an exhaustive census.
+   - When "combinations_exact" is false the counts come from a coarser resolution
+     level: use them to RANK overlaps, not as exact quantities, and avoid quoting
+     the numbers themselves.
+
+   REGION SCOPE:
+   - "region.scope" is "viewport" when the numbers describe only what the user is
+     currently looking at, and "whole volume" when they cover the entire specimen.
+   - When it is "viewport", phrase conclusions as local to the current view. Do not
+     generalize them to the whole specimen.
+
+   These statistics reflect the region named in "region", not the whole dataset unless it says so. Always factor them into your biological reasoning — a marker that is biologically relevant in general but near-absent in this region should be interpreted differently than one with strong local signal.
 
 2. An optional image showing the spatial pattern for the SELECTED markers as colored volumes in a 3D viewer. Match each volume's color to the hex codes in "markers". Use visual cues to inform your response:
    - Heavy volumetric overlap (colors blending/co-located) → co-expression phenotype
@@ -119,6 +163,7 @@ Use channel_stats to ground your labels in the local region:
 - If a selected marker has very low coverage or intensity in this region, prefer cautious labels (e.g., "sparse T cell infiltrate" over "T cell zone").
 - Relative prevalence between selected markers informs the interaction: a dominant tumor signal with sparse immune signal suggests "immune-excluded" or "cold" descriptors; balanced signals suggest active interface.
 - Use the statistics of NON-SELECTED channels to inform "overall" — if the region is rich in channels associated with a specific microenvironment (e.g., stromal, vascular), reflect that context even though those channels aren't visible.
+- Let "combinations" decide between a co-expression key and an interaction key: a selected pair listed with high iou is genuinely co-localized (prefer "MarkerA+MarkerB"), while a pair that is absent or has low iou but high overlap_coeff is better described as an interface (prefer "MarkerA/MarkerB").
 
 "overall": summarize the microenvironment context. Use ["None"] only if no coherent theme connects the markers.
 
@@ -197,8 +242,9 @@ Selection criteria (BOTH must be met):
 
 2. SIGNAL PRESENCE — the channel must have non-negligible signal in this region. Use the statistics to filter:
    - Prefer channels where segmented_voxels / total_voxels indicates meaningful spatial coverage (not near-zero).
-   - Between two biologically relevant candidates, prefer the one with stronger relative expression (mean_intensity / dtype_max) and/or greater coverage.
-   - Do NOT suggest channels that are near-zero on both metrics — they add visual noise, not information.
+   - Between two biologically relevant candidates, prefer the one with stronger relative expression (mean_intensity / dtype_max) and/or greater coverage. When mean_intensity is null, rank on coverage alone — never rank a null below a number.
+   - Do NOT suggest channels with near-zero COVERAGE — they add visual noise, not information. Null intensity is not grounds for exclusion.
+   - A channel already listed in "combinations" alongside a selected marker is a strong candidate: the overlap is measured, so the phenotype or interface it would reveal is known to be present here.
 
 Ordering: sort suggestions by priority (high → low), then by biological relevance within each tier.
 
@@ -217,6 +263,9 @@ Input:
 {{ "task": "suggest", "markers": ["CD3:#00FF00", "MART1:#FF0000"], "channel_stats": {{
   "dtype_max": 65535,
   "total_voxels": 1000000,
+  "intensity_available": true,
+  "stats_radius_um": 5.07,
+  "region": {{ "scope": "viewport", "x_blocks": [30, 45], "y_blocks": [10, 20], "block_voxels": 128 }},
   "channels": {{
     "CD3":   {{ "mean_intensity": 812.5,  "segmented_voxels": 48200 }},
     "MART1": {{ "mean_intensity": 1504.3, "segmented_voxels": 125000 }},
@@ -226,7 +275,12 @@ Input:
     "CD68":  {{ "mean_intensity": 380.0,  "segmented_voxels": 18700 }},
     "KI67":  {{ "mean_intensity": 95.3,   "segmented_voxels": 3200 }},
     "DAPI":  {{ "mean_intensity": 5020.1, "segmented_voxels": 850000 }}
-  }}
+  }},
+  "combinations": [
+    {{ "channels": ["CD3", "MART1"], "iou": 0.18, "overlap_coeff": 0.47 }},
+    {{ "channels": ["MART1", "PDL1"], "iou": 0.11, "overlap_coeff": 0.62 }}
+  ],
+  "combinations_exact": true
 }} }}
 
 Output:
@@ -300,6 +354,8 @@ BOOKMARK RULES
 - "description": 2-4 sentences, concise but informative. Summarize what is visible,
   using selected markers, local channel statistics, and image structure when available.
 - Use channel_stats whenever provided to ground confidence and prevalence language.
+- A bookmark names a PLACE. When region.scope is "viewport", describe what is distinctive about THIS view — the dominant channels by coverage and the overlaps in "combinations" — rather than restating general marker biology.
+- Prefer a title drawn from the strongest measured overlap when one is present (e.g. a dominant CD3/MART1 overlap suggests "T cell tumor interface").
 - If markers is empty, return:
   {{
     "title": "Select channels first",
