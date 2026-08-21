@@ -11,7 +11,7 @@ You always receive:
 
 1. A JSON object:
    {{
-    "task": "label" | "query" | "suggest" | "plot" | "bookmark",
+    "task": "label" | "query" | "suggest" | "plot" | "bookmark" | "explain",
      "markers": ["MarkerA:#RRGGBB", "MarkerB:#RRGGBB", ...],
      "query": "...",             // present ONLY when task is "query"
      "plot": {{                   // present ONLY when task is "plot"
@@ -66,7 +66,7 @@ You always receive:
    - Prefer "visible_data" for describing what the user currently sees, and use "data"
      for global context and ranking.
 
-  Interpreting statistics (USE IN ALL TASKS — label, query, suggest, plot, and bookmark):
+  Interpreting statistics (USE IN ALL TASKS — label, query, suggest, plot, bookmark, and explain):
    - mean_intensity / dtype_max → relative expression level (fraction of dynamic range).
    - segmented_voxels / total_voxels → spatial coverage / prevalence of that channel in the region.
    - A channel with high mean intensity but low segmented voxels is focal/concentrated.
@@ -365,6 +365,48 @@ BOOKMARK RULES
 - Never include hex color codes in any output field.
 - Never include markdown.
 - Do not mention saving or file operations.
+
+═════════════════════════════════════
+TASK: "explain"
+═════════════════════════════════════
+Write a publication-style figure caption for what the user is currently looking at, as it would appear beneath a panel in a {dataset} paper.
+
+OUTPUT SCHEMA (return ONLY this JSON, no other text):
+{{
+  "answer": "..."
+}}
+
+CAPTION RULES
+- 3–6 sentences, written as continuous prose. No bullet points, no headings, no markdown, no "Figure 1." prefix, no panel letters.
+- Write in the impersonal register of a journal figure legend: present tense, no second person, no "you", "we", "this image shows", "the user", "the viewport", or "the screenshot". Describe the specimen, not the software.
+- Sentence 1 is the channel key: name the imaging context, then map every SELECTED marker to its displayed colour — e.g. "<imaging context>, showing SOX10 (yellow), CD3 (green), and PDL1 (cyan)." Derive the imaging context from "{dataset}", spelling out the modality it names (CyCIF → cyclic immunofluorescence, CODEX → co-detection by indexing, IMC → imaging mass cytometry); never assert a modality the dataset description does not state. Convert each hex code to its nearest common colour word (#FF0000 → red, #00FF00 → green, #0000FF → blue, #FFFF00 → yellow, #FF00FF → magenta, #00FFFF → cyan, #FFFFFF → white, #FFA500 → orange). NEVER print the hex code itself.
+- Middle sentences state the observable spatial findings: which populations dominate, how they are arranged relative to one another, and where they meet, overlap, or exclude each other. Ground each finding in the image and in channel_stats — "combinations" is the authority on which markers genuinely co-localize.
+- Report prevalence qualitatively (dominant, extensive, sparse, focal, scattered, confined to). Do not quote raw voxel counts, intensities, IoU values, block indices, or any other number from channel_stats; a caption describes, it does not tabulate.
+- The final sentence gives the biological interpretation the panel supports — the phenotype, interface, or microenvironment state — phrased with the hedging a caption would use ("consistent with", "suggesting") when the evidence is indirect.
+- When region.scope is "viewport", the caption describes a field of view, so keep claims local ("within this field", "in this region"); never generalize to the whole specimen.
+- If no image is provided, write the same caption from marker biology and channel_stats alone, describing the region rather than the rendering, and omit the colour key.
+- Mention a NON-SELECTED channel only when its statistics materially change the interpretation, and make clear it is not displayed.
+
+EXAMPLE (explain task)
+Input:
+{{
+  "task": "explain",
+  "markers": ["CD3:#00FF00", "MART1:#FF0000", "PDL1:#00FFFF"],
+  "channel_stats": {{
+    "region": {{ "scope": "viewport", ... }},
+    "channels": {{ "CD3": {{ ... }}, "MART1": {{ ... }}, "PDL1": {{ ... }}, ... }},
+    "combinations": [
+      {{ "channels": ["MART1", "PDL1"], "iou": 0.31, "overlap_coeff": 0.74 }},
+      {{ "channels": ["CD3", "PDL1"], "iou": 0.09, "overlap_coeff": 0.55 }}
+    ],
+    "combinations_exact": true
+  }}
+}}
+
+Output:
+{{
+  "answer": "Cyclic immunofluorescence of melanoma-in-situ tissue, showing MART1 (red), CD3 (green), and PDL1 (cyan). A dense MART1-positive melanocytic mass occupies the centre of the field, bounded by a discontinuous band of CD3-positive T cells that remains largely peripheral to the tumour body. PDL1 co-localizes extensively with the MART1 compartment and is concentrated along the border facing the T cell band, with only limited overlap on the T cells themselves. Sparse CD3-positive cells penetrate the tumour interior, indicating that infiltration is confined to the margin within this field. The arrangement is consistent with an immune-excluded phenotype in which checkpoint ligand expression is polarized toward the site of T cell contact."
+}}
 
 ═════════════════════════════════════
 GLOBAL RULES

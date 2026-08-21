@@ -340,6 +340,39 @@ def bookmark():
     return err if err else jsonify(result)
 
 
+@app.post("/explain")
+def explain():
+    """Write a paper-style figure caption for the current viewport.
+
+    Body (JSON):
+        markers       : list[str]  – active markers with colors               (required)
+        channel_stats : dict       – full channel statistics for the region    (optional)
+        mode          : str        – "full" | "db" | "minimal"
+        image         : str        – base64-encoded JPEG or PNG                (optional)
+
+    Returns: {"answer": "..."}
+    """
+    err = _check_init()
+    if err:
+        return err
+
+    data = request.get_json(force=True, silent=True) or {}
+    markers, channel_stats, image_b64, mode = _extract_common(data)
+
+    if not markers:
+        return jsonify({"error": "Missing required field: 'markers'"}), 400
+
+    task_json = {
+        "task": "explain",
+        "markers": markers,
+    }
+    if channel_stats is not None:
+        task_json["channel_stats"] = channel_stats
+
+    result, err = _run(task_json, image_b64, mode)
+    return err if err else jsonify(result)
+
+
 def start_server(port: int = 5000, debug: bool = False):
     """Start the Biomni Flask server.
 
