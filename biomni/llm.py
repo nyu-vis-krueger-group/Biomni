@@ -9,6 +9,32 @@ if TYPE_CHECKING:
 SourceType = Literal["OpenAI", "AzureOpenAI", "Anthropic", "Ollama", "Gemini", "Bedrock", "Groq", "Custom"]
 ALLOWED_SOURCES: set[str] = set(SourceType.__args__)
 
+# Anthropic removed the sampling parameters (`temperature`, `top_p`, `top_k`) from its
+# newest models. Sending `temperature` at all — even the API's own former default —
+# fails the request with:
+#   400 invalid_request_error: `temperature` is deprecated for this model.
+# Older models (Opus 4.6 / Sonnet 4.6 and earlier) still accept it, so the parameter is
+# dropped per-model rather than globally.
+NO_SAMPLING_PARAM_MODELS: tuple[str, ...] = (
+    "claude-fable-5",
+    "claude-mythos-5",
+    "claude-opus-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-sonnet-5",
+)
+
+
+def supports_sampling_params(model: str) -> bool:
+    """Whether `model` still accepts `temperature` / `top_p` / `top_k`.
+
+    Handles bare Anthropic ids ("claude-opus-5"), dated snapshots
+    ("claude-opus-5-20260115"), and the Bedrock/Vertex spellings
+    ("anthropic.claude-opus-5", "us.anthropic.claude-opus-5-v1:0").
+    """
+    name = model.lower().rsplit("anthropic.", 1)[-1].split("/")[-1]
+    return not name.startswith(NO_SAMPLING_PARAM_MODELS)
+
 
 def get_llm(
     model: str | None = None,
@@ -24,7 +50,8 @@ def get_llm(
     This function supports models from OpenAI, Azure OpenAI, Anthropic, Ollama, Gemini, Bedrock, and custom model serving.
     Args:
         model (str): The model name to use
-        temperature (float): Temperature setting for generation
+        temperature (float): Temperature setting for generation. Ignored for models that
+                      no longer accept sampling parameters (see NO_SAMPLING_PARAM_MODELS).
         stop_sequences (list): Sequences that will stop generation
         source (str): Source provider: "OpenAI", "AzureOpenAI", "Anthropic", "Ollama", "Gemini", "Bedrock", or "Custom"
                       If None, will attempt to auto-detect from model name
@@ -181,12 +208,10 @@ def get_llm(
             except Exception as e:
                 print(f"Note: Could not load ANTHROPIC_API_KEY from bash_profile: {e}")
 
-        return ChatAnthropic(
-            model=model,
-            temperature=temperature,
-            max_tokens=8192,
-            stop_sequences=stop_sequences,
-        )
+        kwargs = dict(model=model, max_tokens=8192, stop_sequences=stop_sequences)
+        if supports_sampling_params(model):
+            kwargs["temperature"] = temperature
+        return ChatAnthropic(**kwargs)
 
     elif source == "Gemini":
         # If you want to use ChatGoogleGenerativeAI, you need to pass the stop sequences upon invoking the model.
@@ -243,12 +268,14 @@ def get_llm(
             raise ImportError(  # noqa: B904
                 "langchain-aws package is required for Bedrock models. Install with: pip install langchain-aws"
             )
-        return ChatBedrock(
+        kwargs = dict(
             model=model,
-            temperature=temperature,
             stop_sequences=stop_sequences,
             region_name=os.getenv("AWS_REGION", "us-east-1"),
         )
+        if supports_sampling_params(model):
+            kwargs["temperature"] = temperature
+        return ChatBedrock(**kwargs)
 
     elif source == "Custom":
         try:
