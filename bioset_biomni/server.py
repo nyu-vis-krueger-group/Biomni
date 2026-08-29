@@ -1,10 +1,11 @@
 import json
-import os
 import re
+import shutil
 import threading
 from pathlib import Path
 
 from flask import Flask, jsonify, request
+from werkzeug.utils import secure_filename
 
 from biomni.agent import A1
 from biomni.config import default_config
@@ -34,19 +35,30 @@ _HGNC_DESCRIPTION = (
 _DATA_DIR = Path(__file__).parent / "data"
 
 
-def _ensure_hgnc(agent: A1) -> None:
-    """Download the HGNC dataset if absent and register it with the agent."""
-    _DATA_DIR.mkdir(parents=True, exist_ok=True)
-    dest = _DATA_DIR / _HGNC_FILENAME
+def _data_lake_dir(agent: A1) -> Path:
+    """The directory the agent's system prompt advertises as the data lake."""
+    return Path(agent.path) / "data_lake"
 
-    if not dest.exists():
-        print(f"[HGNC] Downloading to {dest} ...")
+
+def _ensure_hgnc(agent: A1) -> None:
+    """Download the HGNC dataset if absent, place it in the agent's data lake, and register it."""
+    _DATA_DIR.mkdir(parents=True, exist_ok=True)
+    cached = _DATA_DIR / _HGNC_FILENAME
+
+    if not cached.exists():
+        print(f"[HGNC] Downloading to {cached} ...")
         try:
             import gdown
-            gdown.download(id=_HGNC_GDRIVE_ID, output=str(dest), quiet=False)
+            gdown.download(id=_HGNC_GDRIVE_ID, output=str(cached), quiet=False)
         except Exception as e:
             print(f"[HGNC] Download failed: {e}")
             return
+
+    lake_dir = _data_lake_dir(agent)
+    lake_dir.mkdir(parents=True, exist_ok=True)
+    dest = lake_dir / _HGNC_FILENAME
+    if not dest.exists():
+        shutil.copy2(cached, dest)
 
     agent.add_data({str(dest): _HGNC_DESCRIPTION})
 
@@ -110,9 +122,12 @@ def _check_init():
     return None
 
 
-def _run(task_json: dict, image_b64: str | None, mode: str) -> tuple:
-    """Build the prompt, run the agent, and return a (result_dict, None) or (None, error_response)."""
-    max_steps = _MODE_MAX_STEPS.get(mode, _MODE_MAX_STEPS["full"])
+def _run(task_json: dict, image_b64: str | None, mode: str | None) -> tuple:
+    """Build the prompt, run the agent, and return a (result_dict, None) or (None, error_response).
+
+    The agent's mode is fixed at /init; a per-request `mode` is only accepted when it
+    matches, so callers cannot silently believe they are A/B-testing modes.
+    """
     prompt = (
         "Return your answer ONLY as a JSON object inside a <solution> tag — "
         "no other text outside the tag.\n\n"
@@ -120,6 +135,25 @@ def _run(task_json: dict, image_b64: str | None, mode: str) -> tuple:
     )
     try:
         with _agent_lock:
+            agent_mode = _agent.mode
+            if mode is None:
+                mode = agent_mode
+            elif mode not in _MODE_MAX_STEPS:
+                return None, (
+                    jsonify({"error": f"Invalid mode '{mode}'. Must be one of: {sorted(_MODE_MAX_STEPS)}"}),
+                    400,
+                )
+            elif mode != agent_mode:
+                return None, (
+                    jsonify(
+                        {
+                            "error": f"Agent was initialised with mode '{agent_mode}' but the request "
+                            f"asked for '{mode}'. Re-run POST /init with the desired mode."
+                        }
+                    ),
+                    409,
+                )
+            max_steps = _MODE_MAX_STEPS[mode]
             _, response = _agent.go(prompt, image=image_b64, max_steps=max_steps)
         return _parse_solution(response), None
     except ValueError as e:
@@ -128,26 +162,28 @@ def _run(task_json: dict, image_b64: str | None, mode: str) -> tuple:
         return None, (jsonify({"error": str(e)}), 500)
 
 
-def _extract_common(data: dict) -> tuple[list | None, dict | None, str | None, str]:
+def _extract_common(data: dict) -> tuple[list | None, dict | None, str | None, str | None]:
     """Extract and validate fields shared by all task endpoints.
 
     Returns (markers, channel_stats, image_b64, mode).
     markers is None when missing so callers can return an error.
+    mode is None when absent; when present it must match the /init mode (enforced in _run).
     """
     markers = data.get("markers") or None
     channel_stats = data.get("channel_stats") or None
     image_b64 = data.get("image") or None
-    mode = data.get("mode", "full")
+    mode = data.get("mode") or None
     return markers, channel_stats, image_b64, mode
 
 
 @app.post("/upload")
 def upload():
-    """Upload a dataset file and register it with the agent.
+    """Upload a dataset file into the agent's data lake and register it.
 
     Multipart form fields:
         file        : the dataset file (required)
         description : plain-text description of the dataset (required)
+        overwrite   : "true" to replace an existing file of the same name (optional)
 
     Returns: {"status": "ok", "filename": "<saved filename>"}
     """
@@ -164,15 +200,25 @@ def upload():
     f = request.files["file"]
     if not f.filename:
         return jsonify({"error": "Uploaded file has no filename"}), 400
+    filename = secure_filename(f.filename)
+    if not filename:
+        return jsonify({"error": f"Invalid filename: {f.filename!r}"}), 400
 
-    _DATA_DIR.mkdir(parents=True, exist_ok=True)
-    dest = _DATA_DIR / f.filename
-    f.save(str(dest))
+    overwrite = (request.form.get("overwrite") or "").lower() in ("1", "true", "yes")
 
     with _agent_lock:
+        lake_dir = _data_lake_dir(_agent)
+        lake_dir.mkdir(parents=True, exist_ok=True)
+        dest = lake_dir / filename
+        if dest.exists() and not overwrite:
+            return (
+                jsonify({"error": f"File '{filename}' already exists. Pass overwrite=true to replace it."}),
+                409,
+            )
+        f.save(str(dest))
         _agent.add_data({str(dest): description})
 
-    return jsonify({"status": "ok", "filename": f.filename})
+    return jsonify({"status": "ok", "filename": filename})
 
 
 @app.post("/label")
@@ -182,7 +228,7 @@ def label():
     Body (JSON):
         markers       : list[str]  – e.g. ["SOX10:#FFFF00", "PRAME:#FF0000"]  (required)
         channel_stats : dict       – full channel statistics for the region      (optional)
-        mode          : str        – "full" | "db" | "minimal"
+        mode          : str        – optional; must match the /init mode when provided
         image         : str        – base64-encoded JPEG or PNG                 (optional)
 
     Returns: {"labels": {...}, "overall": [...]}
@@ -211,7 +257,7 @@ def query():
         markers       : list[str]  – e.g. ["SOX10:#FFFF00", "PRAME:#FF0000"]  (required)
         query         : str        – the question to answer                     (required)
         channel_stats : dict       – full channel statistics for the region     (optional)
-        mode          : str        – "full" | "db" | "minimal"
+        mode          : str        – optional; must match the /init mode when provided
         image         : str        – base64-encoded JPEG or PNG                 (optional)
 
     Returns: {"answer": "..."}
@@ -242,7 +288,7 @@ def suggest():
     Body (JSON):
         markers       : list[str]  – currently selected markers                 (required)
         channel_stats : dict       – full channel statistics for the region     (optional)
-        mode          : str        – "full" | "db" | "minimal"
+        mode          : str        – optional; must match the /init mode when provided
         image         : str        – base64-encoded JPEG or PNG                 (optional)
 
     Returns: {"suggestions": [{"channel": str, "reason": str, "priority": str}, ...]}
@@ -272,7 +318,7 @@ def plot():
         markers       : list[str]  – active markers with colors               (optional)
         channel_stats : dict       – full channel statistics for the region    (optional)
         query         : str        – optional user question about the plot      (optional)
-        mode          : str        – "full" | "db" | "minimal"
+        mode          : str        – optional; must match the /init mode when provided
         image         : str        – base64-encoded JPEG or PNG                (optional)
 
     Returns: {"answer": "..."}
@@ -287,7 +333,7 @@ def plot():
     if not isinstance(plot_payload, dict) or not plot_payload:
         return jsonify({"error": "Missing required field: 'plot' (non-empty object)"}), 400
 
-    mode = data.get("mode", "full")
+    mode = data.get("mode") or None
     image_b64 = data.get("image") or None
     markers = data.get("markers") or []
     channel_stats = data.get("channel_stats")
@@ -314,7 +360,7 @@ def bookmark():
     Body (JSON):
         markers       : list[str]  – active markers with colors               (required)
         channel_stats : dict       – full channel statistics for the region    (optional)
-        mode          : str        – "full" | "db" | "minimal"
+        mode          : str        – optional; must match the /init mode when provided
         image         : str        – base64-encoded JPEG or PNG                (optional)
 
     Returns: {"title": "...", "category": "...", "description": "..."}
@@ -347,7 +393,7 @@ def explain():
     Body (JSON):
         markers       : list[str]  – active markers with colors               (required)
         channel_stats : dict       – full channel statistics for the region    (optional)
-        mode          : str        – "full" | "db" | "minimal"
+        mode          : str        – optional; must match the /init mode when provided
         image         : str        – base64-encoded JPEG or PNG                (optional)
 
     Returns: {"answer": "..."}

@@ -713,8 +713,9 @@ class A1:
                     print("Warning: Skipping invalid data entry - file_path and description must be strings")
                     continue
 
-                # Extract filename from path for storage
-                filename = os.path.basename(file_path) if "/" in file_path else file_path
+                # Extract filename from path for storage. Normalize separators first so
+                # Windows-style paths are split correctly even on POSIX.
+                filename = os.path.basename(file_path.replace("\\", "/"))
 
                 # Store the data with both the full path and description
                 self._custom_data[filename] = {
@@ -1086,6 +1087,11 @@ class A1:
                 if isinstance(item, dict):
                     name = item.get("name", "Unknown")
                     desc = item.get("description", "")
+                    path = item.get("path")
+                    # Custom data may live outside the data lake directory; the agent can
+                    # only open it if the prompt carries the real location.
+                    if path and str(path) != name:
+                        desc = f"{desc} (located at: {path})"
                     custom_data_formatted.append(f"📊 {format_item_with_description(name, desc)}")
                 else:
                     desc = self.data_lake_dict.get(item, f"Custom data: {item}")
@@ -1374,7 +1380,7 @@ Each library is listed with its description to help you understand its functiona
         custom_data = []
         if hasattr(self, "_custom_data") and self._custom_data:
             for name, info in self._custom_data.items():
-                custom_data.append({"name": name, "description": info["description"]})
+                custom_data.append({"name": name, "description": info["description"], "path": info.get("path")})
 
         custom_software = []
         if hasattr(self, "_custom_software") and self._custom_software:
@@ -1899,13 +1905,17 @@ Each library is listed with its description to help you understand its functiona
             print(f"\n[Step limit of {max_steps} reached — synthesizing answer from gathered information...]\n")
             history = final_state["messages"] if final_state else [HumanMessage(content=prompt)]
             synthesis_system = SystemMessage(
-                content="You are a helpful biomedical AI assistant. Provide a direct, plain-text answer only. Do NOT use <execute>, <solution>, or any XML tags. Do not write code."
+                content="You are a helpful biomedical AI assistant. Do NOT write code and do NOT use "
+                "<execute> blocks. Give your final answer inside a single <solution> tag, following "
+                "exactly the output format the task requested (if the task asked for JSON, return "
+                "only that JSON inside the <solution> tag)."
             )
             synthesis_prompt = (
                 f"You have been researching the following task:\n{prompt}\n\n"
                 "You have reached the step limit before completing your plan. "
-                "Based on everything you have gathered so far, provide the best possible final answer. "
-                "Be direct and summarise your findings. Do not write any code or tool calls."
+                "Based on everything you have gathered so far, provide the best possible final answer, "
+                "wrapped in a <solution> tag and following the task's requested output format exactly. "
+                "Do not write any code or tool calls."
             )
             synthesis = self.llm.invoke(
                 [synthesis_system] + history + [HumanMessage(content=synthesis_prompt)],
@@ -2046,7 +2056,7 @@ Each library is listed with its description to help you understand its functiona
         custom_data = []
         if hasattr(self, "_custom_data") and self._custom_data:
             for name, info in self._custom_data.items():
-                custom_data.append({"name": name, "description": info["description"]})
+                custom_data.append({"name": name, "description": info["description"], "path": info.get("path")})
 
         custom_software = []
         if hasattr(self, "_custom_software") and self._custom_software:
